@@ -1,0 +1,457 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# # Contact Tracing with Barabasi-Albert and Watts-Strogatz
+
+# In[1]:
+
+
+import networkx as nx
+import matplotlib.pyplot as plt
+import seaborn as sns
+import imageio
+import matplotlib.animation as animation
+import random
+import math
+from PIL import Image, ImageDraw
+
+
+# #### Create a graph. 
+# 
+# Attributes included in graph:
+# 
+# status - the individual can be susceptible, infected, possibly_infected, exposed, or passed_away
+# 
+# duration - Once infected, the time left until the individual is no longer sick 
+# 
+# contacts - a list of people the individual has met with
+# 
+# self-quarantine - whether the individual has self-quarantined
+# 
+# participation - whether the individual is participating in contact tracing measures
+# 
+# 1. Watts-Strogatz - realistic clustering and unrealistic distribution
+
+# In[2]:
+
+
+G = nx.watts_strogatz_graph(300,11, .2 )
+nx.set_node_attributes(G, "susceptible", "status")
+nx.set_node_attributes(G, 0, "duration")
+nx.set_node_attributes(G, [], "conthttp://localhost:8888/notebooks/Documents/UVAMMM/SIR%20Model.ipynb#acts")
+nx.set_node_attributes(G, "tbd", "risk") # risk by age group
+nx.set_node_attributes(G, "false", "self-quarantine")
+nx.set_node_attributes(G, "false", "participation")
+nx.set_node_attributes(G, 0, "exposed_since")
+nx.set_node_attributes(G, 0, "quarantine_time")
+nx.set_node_attributes(G, 0, "iterate_time")
+nx.set_node_attributes(G, [], "contacts")
+
+
+# 2. Barabasi-Albert has unrealistic clustering and realistic degree distribution - shows people who interact with some people and people who interact with a lot of people
+
+# G = nx.barabasi_albert_graph(300,11)
+# nx.set_node_attributes(G, "susceptible", "status")
+# nx.set_node_attributes(G, 0, "duration")
+# nx.set_node_attributes(G, [], "contacts")
+# nx.set_node_attributes(G, "tbd", "risk") # risk by age group
+# nx.set_node_attributes(G, "false", "self-quarantine")
+# nx.set_node_attributes(G, "false", "participation")
+# nx.set_node_attributes(G, 0, "exposed_since")
+# nx.set_node_attributes(G, 0, "quarantine_time")
+# nx.set_node_attributes(G, 0, "iterate_time")
+#    
+
+# Add additional attributes to the graph. 
+# 
+# risk - based on percent distribution of ages in New York city in 2018
+# 
+# very_low_risk, low_risk, moderate_risk, high_risk
+
+# In[3]:
+
+
+#Set the ages based on percentages (Based on Wikipedia)
+original = G.nodes()
+
+# 20-54 very low risk 
+very_low_risk = random.sample(G.nodes, int (G.number_of_nodes()* .469))
+for a in very_low_risk:
+    G.nodes[a]["risk"] = "very_low_risk"
+after_one_round = [x for x in original if x not in very_low_risk]    
+
+# 55- 64 low risk
+low_risk = random.sample(after_one_round, int (G.number_of_nodes()* .133))
+for b in very_low_risk:
+    G.nodes[b]["risk"] = "low_risk"
+after_two_rounds = [x for x in after_one_round if x not in low_risk]
+
+#65-84 moderate risk
+moderate_risk = random.sample(after_two_rounds, int (G.number_of_nodes()* .143))
+for c in very_low_risk:
+    G.nodes[c]["risk"] = "moderate_risk"
+after_three_rounds = [x for x in after_two_rounds if x not in moderate_risk]
+
+# 85+ high risk
+high_risk = random.sample(after_three_rounds, int (G.number_of_nodes()* .022))
+for d in very_low_risk:
+    G.nodes[d]["risk"] = "high_risk"
+
+
+# Fix the percent participation of contact tracing in the graph 
+# 
+# To change percent participating, alter the percent variable
+
+# In[4]:
+
+
+population = G.nodes()
+percent = .9
+participating = random.sample(population, int (G.number_of_nodes()*percent))
+
+for participant in participating:
+    G.nodes[participant]["participation"] = "true"
+
+
+# #### Methods 
+
+# In[5]:
+
+
+def quarantine(node):
+    if G.nodes[node]["status"] == "infected":
+        if G.nodes[node]["participation"] == "true":
+            G.nodes[node]["self-quarantine"] = "true"
+            G.nodes[node]["quarantine_time"] = 14
+    if G.nodes[node]["status"] == "possibly_infected":
+        if G.nodes[node]["participation"] == "true":
+            G.nodes[node]["self-quarantine"] = "true"
+            G.nodes[node]["quarantine_time"] = 14
+    
+def iterate_quarantine(node):
+    if G.nodes[node]["self-quarantine"] == "true":
+        time = G.nodes[node]["quarantine_time"]
+        if time == 0 :
+            G.nodes[node]["self-quarantine"] = "false"
+        else:
+            G.nodes[node]["quarantine_time"] = time - 1
+
+def generate_meetings(x):
+    if G.nodes[x]["self-quarantine"] == "true":
+        return 0
+    if G.nodes[x]["status"] == "passed_away":
+        return 0
+    else:
+        neighbors = G.neighbors(x)
+        possibilities = []
+        for neighbor in neighbors:
+            if G.nodes[neighbor]["status"] == "passed_away":
+                possibilities.append(x)
+            if G.nodes[neighbor]["self-quarantine"] == "true":
+                possibilities.append(x)
+            else:
+                possibilities.append(neighbor)
+        meetings = []
+        if len(possibilities) < 3:
+            meetings.append(random.sample(list(possibilities),1))
+            #print ("possibilities are ", possibilities)
+        else: 
+            meetings.append(random.sample(list(possibilities),3))
+        return meetings
+
+def add_to_contacts(node, meetings):
+    if G.nodes[node]["status"] == "passed_away":
+        return 0
+    else:
+        templist = (G.nodes[node]["contacts"])
+        if meetings == 0:
+            return 0
+        #print ("meetings are where we", meetings)
+        for x in range(0, len(meetings)):
+            for y in range (0, len(meetings[x])):
+                value = {meetings[x][y]:0}
+                templist.append(value)
+            reciprocate_contacts(meetings[x][y],node)
+
+        G.nodes[node]["contacts"] = templist
+    
+def reciprocate_contacts(friend, node):
+    if G.nodes[friend]["status"] == "passed_away":
+        return 0
+    else:
+        templist = G.nodes[friend]["contacts"]
+        value = {node:0}
+        templist.append(value)
+        G.nodes[friend]["contacts"] = templist
+
+
+def update_day_on_contact_list(node):
+    templist = (G.nodes[node]["contacts"])
+    newlist = []
+    for x in templist:
+        for k, v in x.items():
+            key = x.keys()
+            value = v + 1
+            if value != 15:
+                new_pair = {k: value}
+                newlist.append(new_pair)
+    G.nodes[node]["contacts"] = newlist
+    
+    
+def infect(day, x, meetings):
+    if meetings == 0:
+        return 0
+    else:
+        meetings = meetings[0]
+        infected = random.sample(meetings, int(len(meetings)*.7))
+        #print ("the people to infect are", infected)
+        for person in infected:
+            if G.nodes[person]["status"] == "exposed":
+                return 0
+            if G.nodes[person]["status"] == "passed_away":
+                return 0
+            if G.nodes[person]["status"] == "infected":
+                return 0
+            else:
+                G.nodes[person]["status"] = "exposed"
+                G.nodes[person]["exposed_since"] = day
+                #print (person, "is infected now as we can see ->", G.nodes[person]["status"]  )
+        
+def exposed_to_infected(day,node):
+    if G.nodes[node]["status"] == "exposed":
+        day_exposed = G.nodes[node]["exposed_since"]
+        #print ("day exposed is ", day_exposed)
+        total = day - day_exposed
+        if total == 3:
+            G.nodes[node]["status"] = "infected"
+
+def possibly_infected_to_infected(infections):
+    infected = random.sample(infections, int(len(infections)*.2))
+    print ("length", len(infections))
+    print ("infected", infected)
+    for person in infected:
+        G.nodes[person]["status"] = "infected"
+        G.nodes[person]["duration"] = 14
+        print (person, G.nodes[person]["status"] )
+
+def collect_possible_infections(G):
+    infections = []
+    for node in G.nodes:
+        if G.nodes[node]["status"] =="possibly_infected":
+            infections.append(node)
+    return infections
+        
+    
+       
+def check_for_infection_update(node, meetings):
+    if G.nodes[node]["status"] == "passed_away":
+        return 0
+    elif G.nodes[node]["status"] == "infected":
+        return 0
+    else:
+        for x in range(0, len(meetings)):
+            for y in range (0, len(meetings[x])):
+                if(G.nodes[meetings[x][y]]["status"] == "infected"):
+                    G.nodes[node]["status"] = "infected"
+                    print("status is changing here check for infection", G.nodes[node]["status"])
+                    G.nodes[node]["duration"] = 14
+        
+            
+def make_person_less_sick(z):
+    if G.nodes[z]["status"] == "passed_away":
+        return 0
+    elif G.nodes[z]["status"] == "infected":
+        current_time = G.nodes[z]["duration"] - 1
+        G.nodes[z]["duration"] = current_time
+        if G.nodes[z]["duration"] == 0:
+            G.nodes[z]["status"] == "susceptible"
+            G.nodes[z]["duration"] = 0
+            
+            
+def contact_tracing(day, node):
+    if G.nodes[node]["status"] == "passed_away":
+        return 0
+    if G.nodes[node]["status"] == "susceptible":
+        return 0
+    if G.nodes[node]["participation"] == "false":
+        return 0
+    else:
+            list = G.nodes[node]["contacts"]
+            for x in list:
+                for k, v in x.items():
+                    if G.nodes[k]["status"] == "passed_away":
+                        return 0
+                    if G.nodes[k]["status"] == "exposed":
+                        return 0
+                    if G.nodes[k]["status"] == "infected":
+                        return 0 
+                    ###### might say if false do nothing bc they dont wanna know 
+                    
+                    elif G.nodes[node]["status"] == "infected" or G.nodes[node]["status"] == "exposed" :
+                        if G.nodes[k]["status"] != "infected":
+                            G.nodes[k]["status"] = "possibly_infected"
+                            
+                                
+                    
+                    
+def check_mortality(G):
+    # Probability based on risk group
+    sick = []
+    passed_away = []
+    very_low_risk = []
+    low_risk = []
+    moderate_risk = []
+    high_risk = []
+    
+    # Go through all the nodes 
+    for y in G.nodes():
+        if G.nodes[y]["status"] == "infected":
+            if G.nodes[y]["risk"] == "very_low_risk":
+                very_low_risk.append(y)
+            if G.nodes[y]["risk"] == "low_risk":
+                low_risk.append(y)
+            if G.nodes[y]["risk"] == "moderate_risk":
+                moderate_risk.append(y)
+            if G.nodes[y]["risk"] == "high_risk":
+                high_risk.append(y)
+                
+    passed_away.append(random.sample(list(very_low_risk),int(.002*len(very_low_risk))))
+    passed_away.append(random.sample(list(low_risk),int(.01*len(low_risk))))
+    passed_away.append(random.sample(list(moderate_risk),int(.03*len(moderate_risk))))
+    passed_away.append(random.sample(list(high_risk),int(.10*len(high_risk))))
+    
+    total_passed = []
+    for x in (passed_away[0]):
+        G.nodes[x]["status"] = "passed_away"
+        total_passed.append(x)
+    for y in (passed_away[1]):
+        G.nodes[y]["status"] = "passed_away"
+        total_passed.append(y)
+    for z in (passed_away[2]):
+        G.nodes[z]["status"] = "passed_away"
+        total_passed.append(z)
+    for u in (passed_away[3]):
+        G.nodes[u]["status"] = "passed_away"
+        total_passed.append(u)
+    #print ("PASSED AWAY IN THE METHOD", total_passed)
+    return total_passed
+        
+    
+def create_graph_image(starting, day, death_toll, num, G):
+    ## Draw the Map with proper colors 
+    color_map = []
+    textstr = "Day " + str(day) + "\n" + "\n" + "Original Population " + str(starting) + "\n" + "\n" + "Individuals passed away: " + str(death_toll)
+    for i in G.nodes():
+        if G.nodes[i]["status"] == "infected": ## node name needs to go in here 
+            color_map.append('red')
+        elif G.nodes[i]["status"] == "possibly_infected": ## node name needs to go in here 
+            color_map.append('yellow')
+        elif G.nodes[i]["status"] == "passed_away": ## node name needs to go in here 
+            color_map.append('white')
+        else: 
+            color_map.append('lightblue')
+            
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots()        
+    plt.figure(3,figsize=(25,15)) 
+    pos = nx.kamada_kawai_layout(G) #other layout commands are available.
+    nx.draw(G, pos = pos, node_color=color_map, node_size = 30, with_labels=False, width = .2, edge_color = "gray")
+    # place a text box in bottom right in axes coords
+    
+    props = dict(boxstyle='round', facecolor='black', alpha=0.5, edgecolor = "none")
+    plt.text(0.35, 0.35, textstr, horizontalalignment='center',verticalalignment='center', transform=ax.transAxes, bbox=props, fontsize = 20)
+    #ax.text(0.7, 0.03, textstr, transform=ax.transAxes, fontsize=20,verticalalignment='top', bbox=props)
+    plt.savefig("/user-specific-location/images/" + str(num) + "pyplotgraph.png")
+    plt.clf()
+    
+
+
+# Then start the simulation
+
+# In[ ]:
+
+
+images = []
+total_deaths = []
+starting = G.number_of_nodes()
+total_passed = 0
+
+
+## STARTING POINT before the pandemic
+for i in range (0,14): # Days
+    print("On Day", i)
+
+    ## update the people who were already in the contact list to indicate passed time
+    create_graph_image(starting, i, total_passed, i, G)
+   
+    #if (i > 0):
+    for y in G.nodes:
+        update_day_on_contact_list(y)
+        contact_tracing(i, y)
+        make_person_less_sick(y)
+        
+    ## there will be people meeting
+    for x in G.nodes():
+        meetings = generate_meetings(x)
+        if G.nodes[x]["status"] == "infected":
+            infect(i, x, meetings)
+            
+    ## add person to the contact list of the other person as a dictionary with the number of days since they met
+        add_to_contacts(x, meetings)
+
+        
+G.nodes[0]["status"] = "infected"
+G.nodes[0]["duration"] = 14
+             
+## STARTING POINT of PANDEMIC
+for i in range (14,90): ## every day for a month - create a graph per day and compile into gif 
+    ## Draw Graph
+    create_graph_image(starting, i, total_passed, i, G)
+    print("On Day", i) 
+    
+    possible_infections = collect_possible_infections(G)
+    print (possible_infections)
+    possibly_infected_to_infected(possible_infections)
+    
+    if i > 21: 
+        deaths = check_mortality(G)
+        for death in deaths:
+            total_deaths.append(death)
+        total_passed = len(total_deaths)
+        
+    if (i > 0):
+        for y in G.nodes():
+            quarantine(y)
+            update_day_on_contact_list(y)
+            contact_tracing(i, y)
+            make_person_less_sick(y)
+            
+    if (i > 14):
+        for n in G.nodes:
+            iterate_quarantine(n)
+            exposed_to_infected(i,n)
+
+## there will be people meeting
+    for x in G.nodes():
+    ## go through each person and generate who they will meet with
+        meetings = generate_meetings(x)
+        if G.nodes[x]["status"] == "infected":
+            infect(i, x, meetings)
+        
+    ## add person to the contact list of the other person as a dictionary with the number of days since they met
+        add_to_contacts(x, meetings)
+        
+    
+#for num in range (90):
+    #filename = "/user-specific-locationimages/" + str(num) + "pyplotgraph.png" 
+    #images.append(imageio.imread(filename))
+
+#imageio.mimsave("/user-specific-location/movinggraph.gif", images)
+
+print ("started with", starting , "people")
+print ("ended with", G.number_of_nodes(), "people")
+print(total_passed, "passed away")
+
+
+
+
